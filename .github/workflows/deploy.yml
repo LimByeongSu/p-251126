@@ -1,18 +1,21 @@
 name: deploy
+env:
+  IMAGE_NAME: app251126
 
 on:
   push:
     paths:
-      - '.github/workflows/**'
-      - 'src/**'
-      - 'build.gradle.kts'
-      - 'settings.gradle.kts'
-      - 'Dockerfile'
+      - ".github/workflows/**"
+      - "src/**"
+      - "build.gradle.kts"
+      - "Dockerfile"
     branches:
       - main
 
-env:
-  IMAGE_NAME: app251126 # 공통으로 설정해도 됨 (하지만 output도 병행)
+# 권한 최소화/명시화
+permissions:
+  contents: write # 태그/릴리즈
+  packages: write # GHCR 푸시
 
 jobs:
   makeTagAndRelease:
@@ -41,21 +44,22 @@ jobs:
   buildImageAndPush:
     name: 도커 이미지 빌드와 푸시
     needs: makeTagAndRelease
+    defaults:
+      run:
+        working-directory: back # 원하는 디렉토리
     runs-on: ubuntu-latest
     outputs:
       owner_lc: ${{ steps.export_owner.outputs.owner_lc }}
       image_name: ${{ steps.export_image.outputs.image_name }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: application-secret.yml 생성
+      - name: application-secret 추가
         env:
+          ACTIONS_STEP_DEBUG: true
           APPLICATION_SECRET: ${{ secrets.APPLICATION_SECRET }}
-        run: echo "$APPLICATION_SECRET" > back/src/main/resources/application-secret.yml
-
+        run: echo "$APPLICATION_SECRET" > src/main/resources/application-secret.yml
       - name: Docker Buildx 설치
         uses: docker/setup-buildx-action@v2
-
       - name: 레지스트리 로그인
         uses: docker/login-action@v2
         with:
@@ -71,12 +75,12 @@ jobs:
 
       - name: export image name
         id: export_image
-        run: echo "image_name=app250416" >> $GITHUB_OUTPUT
+        run: echo "image_name=app251126" >> $GITHUB_OUTPUT
 
       - name: 빌드 앤 푸시
         uses: docker/build-push-action@v3
         with:
-          context: .
+          context: ./back
           push: true
           tags: |
             ghcr.io/${{ steps.export_owner.outputs.owner_lc }}/${{ steps.export_image.outputs.image_name }}:${{ needs.makeTagAndRelease.outputs.tag_name }},
@@ -84,7 +88,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs: [ buildImageAndPush ]
+    needs: [buildImageAndPush]
     steps:
       - name: AWS SSM Send-Command
         uses: peterkimzz/aws-ssm-send-command@master
@@ -101,4 +105,4 @@ jobs:
             docker stop app1 2>/dev/null || true && \
             docker rm app1 2>/dev/null || true && \
             docker run -d --name app1 --network common -p 8080:8080 ghcr.io/${{ needs.buildImageAndPush.outputs.owner_lc }}/${{ needs.buildImageAndPush.outputs.image_name }}:latest && \
-            docker rmi $(docker images -f "dangling=true" -q) || true
+            docker image prune -f
